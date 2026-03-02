@@ -14,7 +14,7 @@ const OSRM_TABLE      = 'https://router.project-osrm.org/table/v1';
 const THRESHOLD = { foot: 200, bicycle: 300, car: 400 }; // metres
 
 // ── State ──────────────────────────────────────────────────────────────────
-let map, gpsDotMarker, routeLayer, shelterLayerGroup, destLayer;
+let map, gpsDotMarker, routeLayer, walkRouteLayer, shelterLayerGroup, destLayer;
 let currentMode   = 'foot';
 let currentRoute  = null;   // GeoJSON coordinates array
 let allShelters   = [];     // cached shelter list
@@ -199,16 +199,23 @@ function renderShelters(nearbyShelters) {
   }
 }
 
-function renderRoute(routeCoords, distKm) {
+function renderRoute(routeCoords, distKm, mins, color = '#3b82f6', labelIcon = '') {
   if (routeLayer) map.removeLayer(routeLayer);
+  if (walkRouteLayer) { map.removeLayer(walkRouteLayer); walkRouteLayer = null; }
   const latlngs = routeCoords.map(([lon, lat]) => [lat, lon]);
-  routeLayer = L.polyline(latlngs, { color: '#3b82f6', weight: 5, opacity: 0.85 }).addTo(map);
-  if (distKm) {
-    routeLayer.bindTooltip(`📏 ${distKm} km`, {
-      permanent: true, direction: 'center', className: 'route-dist-label'
-    });
-  }
+  routeLayer = L.polyline(latlngs, { color, weight: 5, opacity: 0.85 }).addTo(map);
+  const label = [labelIcon, distKm ? `📏 ${distKm} km` : '', mins ? `~${mins} min` : ''].filter(Boolean).join(' · ');
+  if (label) routeLayer.bindTooltip(label, { permanent: true, direction: 'center', className: 'route-dist-label' });
   return routeLayer;
+}
+
+function renderWalkRoute(routeCoords, distKm, mins) {
+  if (walkRouteLayer) map.removeLayer(walkRouteLayer);
+  const latlngs = routeCoords.map(([lon, lat]) => [lat, lon]);
+  walkRouteLayer = L.polyline(latlngs, { color: '#16a34a', weight: 5, opacity: 0.85 }).addTo(map);
+  const label = `🚶 · 📏 ${distKm} km · ~${mins} min`;
+  walkRouteLayer.bindTooltip(label, { permanent: true, direction: 'center', className: 'route-dist-label' });
+  return walkRouteLayer;
 }
 
 // ── Status bar helpers ─────────────────────────────────────────────────────
@@ -247,28 +254,61 @@ async function navigateToNearestShelter() {
       .map(s => ({ ...s, dist: haversine(gps.lat, gps.lon, s.lat, s.lon) }))
       .sort((a, b) => a.dist - b.dist)[0];
 
-    // Get walking route on actual streets (foot profile allows walking against traffic)
-    const route   = await getRoute(gps, { lat: nearest.lat, lon: nearest.lon }, 'foot');
-    currentRoute  = route.coords;
-    const distKm  = (route.distance / 1000).toFixed(2);
-    const mins    = Math.ceil(route.duration / 60);
+    const dest = { lat: nearest.lat, lon: nearest.lon };
     const modeLbl = { foot: 'walking', bicycle: 'biking', car: 'driving' }[currentMode] || currentMode;
 
-    renderRoute(route.coords, distKm);
+    if (currentMode === 'car') {
+      // Dual routes: car (blue) + walking (green)
+      setStatus('Fetching car and walking routes…');
+      const [carRoute, footRoute] = await Promise.all([
+        getRoute(gps, dest, 'car'),
+        getRoute(gps, dest, 'foot'),
+      ]);
+      currentRoute = carRoute.coords;
+      const carKm   = (carRoute.distance / 1000).toFixed(2);
+      const carMins = Math.ceil(carRoute.duration / 60);
+      const walkKm  = (footRoute.distance / 1000).toFixed(2);
+      const walkMins = Math.ceil(footRoute.duration / 60);
 
-    // Pin destination on its own layer — all other shelter markers stay on the map
-    destLayer.clearLayers();
-    const destMarker = L.marker([nearest.lat, nearest.lon], { icon: redIcon });
-    destMarker.bindPopup(
-      `<div class="popup-name">🎯 ${nearest.name || 'מקלט ציבורי'}</div>` +
-      `<div class="popup-address">${nearest.address || ''}</div>` +
-      `<div class="popup-dist">📏 ${distKm} km · ~${mins} min ${modeLbl}</div>`
-    ).openPopup();
-    destLayer.addLayer(destMarker);
+      renderRoute(carRoute.coords, carKm, carMins, '#3b82f6', '🚗');
+      renderWalkRoute(footRoute.coords, walkKm, walkMins);
 
-    map.fitBounds(route.bounds, { padding: [60, 60] });
+      destLayer.clearLayers();
+      const destMarker = L.marker([nearest.lat, nearest.lon], { icon: redIcon });
+      destMarker.bindPopup(
+        `<div class="popup-name">🎯 ${nearest.name || 'מקלט ציבורי'}</div>` +
+        `<div class="popup-address">${nearest.address || ''}</div>` +
+        `<div class="popup-dist">🚗 ${carKm} km · ~${carMins} min driving</div>` +
+        `<div class="popup-dist">🚶 ${walkKm} km · ~${walkMins} min walking</div>`
+      ).openPopup();
+      destLayer.addLayer(destMarker);
 
-    setStatus(`🛡️ Nearest shelter: ${distKm} km away · ~${mins} min ${modeLbl}`, 'success');
+      const bounds = carRoute.bounds.extend(footRoute.bounds);
+      map.fitBounds(bounds, { padding: [60, 60] });
+      setStatus(`🛡️ Nearest shelter — 🚗 ${carKm} km ~${carMins} min · 🚶 ${walkKm} km ~${walkMins} min`, 'success');
+
+    } else {
+      // Single route for walking or bike
+      const route  = await getRoute(gps, dest, currentMode);
+      currentRoute = route.coords;
+      const distKm = (route.distance / 1000).toFixed(2);
+      const mins   = Math.ceil(route.duration / 60);
+      const modeIcon = currentMode === 'bicycle' ? '🚴' : '🚶';
+
+      renderRoute(route.coords, distKm, mins, '#3b82f6', modeIcon);
+
+      destLayer.clearLayers();
+      const destMarker = L.marker([nearest.lat, nearest.lon], { icon: redIcon });
+      destMarker.bindPopup(
+        `<div class="popup-name">🎯 ${nearest.name || 'מקלט ציבורי'}</div>` +
+        `<div class="popup-address">${nearest.address || ''}</div>` +
+        `<div class="popup-dist">📏 ${distKm} km · ~${mins} min ${modeLbl}</div>`
+      ).openPopup();
+      destLayer.addLayer(destMarker);
+
+      map.fitBounds(route.bounds, { padding: [60, 60] });
+      setStatus(`🛡️ Nearest shelter: ${distKm} km away · ~${mins} min ${modeLbl}`, 'success');
+    }
     document.getElementById('shelter-count').hidden = true;
 
   } catch (e) {
@@ -300,8 +340,9 @@ async function findRoute() {
     setStatus('Fetching route…');
     const route  = await getRoute(from, to, currentMode);
     currentRoute = route.coords;
-    const distKm = (route.distance / 1000).toFixed(2);
-    renderRoute(route.coords, distKm);
+    const distKm  = (route.distance / 1000).toFixed(2);
+    const routeMins = Math.ceil(route.duration / 60);
+    renderRoute(route.coords, distKm, routeMins);
     map.fitBounds(route.bounds, { padding: [60, 60] });
 
     // 3. Fetch shelters (sync — data is embedded)
