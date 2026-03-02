@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Tel Aviv Shelter Finder</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <!-- App CSS -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Control Panel -->
+  <div id="control-panel">
+    <div id="panel-header">
+      <span id="panel-title">🛡️ Tel Aviv Shelter Finder</span>
+      <button id="panel-toggle" aria-label="Toggle panel">▲</button>
+    </div>
+
+    <div id="panel-body">
+      <!-- From -->
+      <div class="input-row">
+        <label for="from-input">From</label>
+        <div class="input-with-btn">
+          <input
+            id="from-input"
+            type="text"
+            placeholder="Start address or use GPS…"
+            autocomplete="off"
+          />
+          <button id="gps-btn" title="Use my current location" aria-label="Use my location">📍</button>
+        </div>
+      </div>
+
+      <!-- To -->
+      <div class="input-row">
+        <label for="to-input">To</label>
+        <div class="input-with-btn">
+          <input
+            id="to-input"
+            type="text"
+            placeholder="Destination address…"
+            autocomplete="off"
+          />
+        </div>
+      </div>
+
+      <!-- Mode selector -->
+      <div id="mode-row">
+        <button class="mode-btn active" data-mode="foot" aria-pressed="true">🚶 Walk</button>
+        <button class="mode-btn" data-mode="bicycle" aria-pressed="false">🚴 Bike</button>
+        <button class="mode-btn" data-mode="car" aria-pressed="false">🚗 Drive</button>
+      </div>
+
+      <!-- Action -->
+      <button id="find-btn">Find Route &amp; Shelters</button>
+
+      <!-- Status -->
+      <div id="status-bar" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <!-- Shelter count badge -->
+  <div id="shelter-count" hidden></div>
+
+  <!-- Emergency bottom button -->
+  <button id="nearest-btn" hidden>
+    🛡️ Take Me to Nearest Shelter
+  </button>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Shelter data (embedded from official Tel Aviv municipality list) -->
+  <script src="shelters-data.js"></script>
+
+  <!-- App JS -->
+  <script src="app.js"></script>
+</body>
+</html>

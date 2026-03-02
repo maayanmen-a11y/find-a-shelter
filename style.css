@@ -1,0 +1,313 @@
+/* ─── Reset & base ────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 16px;
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow: hidden;
+}
+
+/* ─── Map ─────────────────────────────────────────────────────── */
+#map {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+}
+
+/* ─── Control Panel ───────────────────────────────────────────── */
+#control-panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.96);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(100, 116, 139, 0.3);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+
+#panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  min-height: 48px;
+}
+
+#panel-title {
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  color: #f1f5f9;
+}
+
+#panel-toggle {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.2s;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#panel-toggle:hover { color: #e2e8f0; }
+#panel-toggle.collapsed { transform: rotate(180deg); }
+
+#panel-body {
+  padding: 0 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: max-height 0.3s ease, opacity 0.3s ease;
+  overflow: hidden;
+}
+#panel-body.collapsed {
+  max-height: 0 !important;
+  opacity: 0;
+  padding-bottom: 0;
+}
+
+/* ─── Inputs ──────────────────────────────────────────────────── */
+.input-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.input-row label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+.input-with-btn {
+  display: flex;
+  gap: 6px;
+}
+
+.input-with-btn input {
+  flex: 1;
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(100, 116, 139, 0.4);
+  border-radius: 8px;
+  color: #f1f5f9;
+  font-size: 0.95rem;
+  padding: 10px 14px;
+  min-height: 44px;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.input-with-btn input::placeholder { color: #475569; }
+.input-with-btn input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+
+/* GPS button */
+#gps-btn {
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid rgba(100, 116, 139, 0.4);
+  border-radius: 8px;
+  color: #60a5fa;
+  font-size: 1.1rem;
+  cursor: pointer;
+  min-width: 44px;
+  min-height: 44px;
+  transition: background 0.2s, border-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#gps-btn:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: #3b82f6;
+}
+#gps-btn.loading { opacity: 0.6; cursor: wait; }
+
+/* ─── Mode buttons ────────────────────────────────────────────── */
+#mode-row {
+  display: flex;
+  gap: 8px;
+}
+
+.mode-btn {
+  flex: 1;
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(100, 116, 139, 0.35);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 9px 4px;
+  min-height: 44px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.mode-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+.mode-btn.active {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
+/* ─── Find button ─────────────────────────────────────────────── */
+#find-btn {
+  width: 100%;
+  background: #2563eb;
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 13px;
+  min-height: 48px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  transition: background 0.2s, transform 0.1s;
+}
+#find-btn:hover { background: #1d4ed8; }
+#find-btn:active { transform: scale(0.98); }
+#find-btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+/* ─── Status bar ──────────────────────────────────────────────── */
+#status-bar {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  min-height: 18px;
+  text-align: center;
+}
+#status-bar.error { color: #f87171; }
+#status-bar.success { color: #4ade80; }
+
+/* ─── Shelter count badge ─────────────────────────────────────── */
+#shelter-count {
+  position: fixed;
+  top: 60px;
+  right: 12px;
+  z-index: 900;
+  background: rgba(22, 163, 74, 0.9);
+  color: #fff;
+  border-radius: 20px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  pointer-events: none;
+}
+
+/* ─── Nearest Shelter button ──────────────────────────────────── */
+#nearest-btn {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  background: #16a34a;
+  border: none;
+  border-top: 2px solid #4ade80;
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  padding: 18px 20px;
+  cursor: pointer;
+  min-height: 64px;
+  transition: background 0.2s, transform 0.1s;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.4);
+}
+#nearest-btn:hover { background: #15803d; }
+#nearest-btn:active { transform: scale(0.99); }
+#nearest-btn:disabled { background: #1e293b; border-color: #334155; color: #475569; cursor: not-allowed; }
+
+/* ─── Leaflet popup customisation ─────────────────────────────── */
+.leaflet-popup-content-wrapper {
+  background: #1e293b !important;
+  color: #e2e8f0 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
+}
+.leaflet-popup-tip { background: #1e293b !important; }
+.leaflet-popup-content { font-size: 0.88rem; line-height: 1.5; }
+.popup-name { font-weight: 700; margin-bottom: 4px; color: #4ade80; }
+.popup-address { color: #94a3b8; }
+.popup-dist { color: #60a5fa; font-size: 0.8rem; margin-top: 4px; }
+
+/* ─── Route distance label ────────────────────────────────────── */
+.route-dist-label {
+  background: rgba(37, 99, 235, 0.9) !important;
+  border: none !important;
+  border-radius: 6px !important;
+  color: #fff !important;
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  padding: 3px 8px !important;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35) !important;
+  white-space: nowrap;
+}
+.route-dist-label::before { display: none !important; }
+
+/* ─── Pulsing GPS dot ─────────────────────────────────────────── */
+.gps-dot {
+  width: 16px;
+  height: 16px;
+  background: #3b82f6;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.6);
+  animation: pulse-gps 2s infinite;
+}
+@keyframes pulse-gps {
+  0%   { box-shadow: 0 0 0 0   rgba(59, 130, 246, 0.6); }
+  70%  { box-shadow: 0 0 0 12px rgba(59, 130, 246, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(59, 130, 246, 0);    }
+}
+
+/* ─── Desktop layout ──────────────────────────────────────────── */
+@media (min-width: 640px) {
+  #control-panel {
+    top: 12px;
+    left: 12px;
+    right: auto;
+    width: 340px;
+    border-radius: 14px;
+    border: 1px solid rgba(100, 116, 139, 0.25);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+
+  #panel-toggle { display: none; }
+
+  #nearest-btn {
+    left: 12px;
+    right: auto;
+    width: 340px;
+    bottom: 12px;
+    border-radius: 12px;
+    border: 2px solid #4ade80;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+
+  #shelter-count {
+    top: auto;
+    bottom: 90px;
+    right: auto;
+    left: 12px;
+    width: 340px;
+    text-align: center;
+    border-radius: 8px;
+  }
+}
