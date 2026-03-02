@@ -288,11 +288,14 @@ async function navigateToNearestShelter() {
       setStatus(`🛡️ Nearest shelter — 🚗 ${carKm} km ~${carMins} min · 🚶 ${walkKm} km ~${walkMins} min`, 'success');
 
     } else {
-      // Single route for walking or bike
-      const route  = await getRoute(gps, dest, currentMode);
+      // Use walking route for both foot and bicycle (ignores one-way streets)
+      // For bicycle: use walking path but calculate time at cycling speed (~15 km/h)
+      const route  = await getRoute(gps, dest, 'foot');
       currentRoute = route.coords;
       const distKm = (route.distance / 1000).toFixed(2);
-      const mins   = Math.ceil(route.duration / 60);
+      const mins   = currentMode === 'bicycle'
+        ? Math.ceil(route.distance / 250)   // 15 km/h = 250 m/min
+        : Math.ceil(route.duration / 60);   // walking: use OSRM time
       const modeIcon = currentMode === 'bicycle' ? '🚴' : '🚶';
 
       renderRoute(route.coords, distKm, mins, '#3b82f6', modeIcon);
