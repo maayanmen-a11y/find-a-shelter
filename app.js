@@ -28,6 +28,15 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+async function fetchRetry(url, opts) {
+  try {
+    return await fetch(url, opts);
+  } catch {
+    await new Promise(r => setTimeout(r, 1000));
+    return fetch(url, opts); // one retry on network error
+  }
+}
+
 // ── Init map ───────────────────────────────────────────────────────────────
 function initMap() {
   map = L.map('map', { zoomControl: true }).setView(TEL_AVIV_CENTER, 13);
@@ -65,7 +74,7 @@ function getGPS() {
 
 // ── Geocoding helpers ──────────────────────────────────────────────────────
 function parseAddressInput(address) {
-  const m = address.trim().match(/^(.*?)\s+(\d+)(?:\s|$)/);
+  const m = address.trim().match(/^(.*?)\s+(\d+)(?:[\s,]|$)/);
   return m ? { street: m[1].trim(), house: parseInt(m[2]) } : { street: address.trim(), house: null };
 }
 
@@ -101,6 +110,31 @@ function positionAtT(t, geom, cumLens) {
   return { lat: geom[geom.length-1].lat, lon: geom[geom.length-1].lon };
 }
 
+// ── Chain way segments into a continuous polyline ─────────────────────────
+function chainWays(ways) {
+  if (ways.length === 0) return [];
+  if (ways.length === 1) return [ways[0].geometry];
+  const segs = ways.map(w => [...w.geometry]);
+  const result = [segs.shift()];
+  while (segs.length) {
+    const last = result[result.length - 1];
+    const end  = last[last.length - 1];
+    let bi = -1, bd = Infinity, rev = false;
+    for (let i = 0; i < segs.length; i++) {
+      const s  = segs[i];
+      const d0 = haversine(end.lat, end.lon, s[0].lat, s[0].lon);
+      const d1 = haversine(end.lat, end.lon, s[s.length - 1].lat, s[s.length - 1].lon);
+      if (d0 < bd) { bd = d0; bi = i; rev = false; }
+      if (d1 < bd) { bd = d1; bi = i; rev = true;  }
+    }
+    if (bi === -1 || bd > 100) { result.push(...segs.splice(0)); break; }
+    const seg = segs.splice(bi, 1)[0];
+    if (rev) seg.reverse();
+    result.push(seg);
+  }
+  return result;
+}
+
 // ── Geocoding ──────────────────────────────────────────────────────────────
 async function geocode(address) {
   const { street, house } = parseAddressInput(address);
@@ -109,7 +143,7 @@ async function geocode(address) {
     try {
       // Step 1: Find the street as a WAY via Nominatim (no house number)
       const streetUrl = `${NOMINATIM}?q=${encodeURIComponent(street + ' תל אביב')}&format=json&limit=5&countrycodes=il&namedetails=1`;
-      const streetRes = await fetch(streetUrl, { headers: { 'Accept-Language': 'he' } });
+      const streetRes = await fetchRetry(streetUrl, { headers: { 'Accept-Language': 'he' } });
       const streetData = await streetRes.json();
       const wayResult  = streetData.find(r => r.osm_type === 'W' && r.class === 'highway');
 
@@ -123,14 +157,14 @@ way["name"="${osmName}"]["highway"](area.city)->.ways;
 node(around.ways:25)["addr:housenumber"]->.addrnodes;
 (.ways;.addrnodes;);
 out geom;`;
-        const ovRes  = await fetch(OVERPASS, { method: 'POST', body: 'data=' + encodeURIComponent(query) });
+        const ovRes  = await fetchRetry(OVERPASS, { method: 'POST', body: 'data=' + encodeURIComponent(query) });
         const ovData = await ovRes.json();
 
         const ways      = ovData.elements.filter(e => e.type === 'way' && e.geometry?.length);
         const addrNodes = ovData.elements.filter(e => e.type === 'node' && e.tags?.['addr:housenumber']);
 
         if (ways.length) {
-          const geom    = ways.flatMap(w => w.geometry);
+          const geom    = chainWays(ways).flat();
           const cumLens = cumulativeLengths(geom);
 
           const calibPts = addrNodes
@@ -160,7 +194,7 @@ out geom;`;
   // Fallback: original Nominatim free-text query (always include city for accuracy)
   const queryAddr = address.includes('תל אביב') ? address : address + ' תל אביב';
   const url = `${NOMINATIM}?q=${encodeURIComponent(queryAddr)}&format=json&limit=1&countrycodes=il`;
-  const res  = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+  const res  = await fetchRetry(url, { headers: { 'Accept-Language': 'en' } });
   if (!res.ok) throw new Error('Geocoding request failed');
   const data = await res.json();
   if (!data.length) throw new Error(`Address not found: "${address}"`);
@@ -181,8 +215,14 @@ function getStreetList() {
 }
 
 async function fetchSuggestions(query) {
-  return getStreetList()
-    .filter(name => name.includes(query))
+  const source = (typeof STREETS_DATA !== 'undefined' ? STREETS_DATA : []).concat(getStreetList());
+  const seen = new Set();
+  return source
+    .filter(name => name.includes(query) && !seen.has(name) && seen.add(name))
+    .sort((a, b) => {
+      const ai = a.indexOf(query), bi = b.indexOf(query);
+      return ai !== bi ? ai - bi : a.length - b.length;
+    })
     .map(name => ({ properties: { name, osm_key: 'highway' } }));
 }
 
@@ -190,8 +230,8 @@ function formatSuggestion(feature, overrideHouse = null) {
   const p    = feature.properties;
   const road = p.street || p.name;                                    // highway way → p.name; address node → p.street
   const num  = overrideHouse !== null ? overrideHouse : p.housenumber;
-  if (road && num) return `${road} ${num}`;
-  if (road)        return road;
+  if (road && num) return `${road} ${num}, תל אביב`;
+  if (road)        return `${road}, תל אביב`;
   return '';
 }
 
@@ -482,6 +522,14 @@ async function navigateToNearestShelter() {
 
 // ── Main "Find Route" flow ─────────────────────────────────────────────────
 async function findRoute() {
+  // Fill input text with top suggestion if a dropdown is visible
+  ['from', 'to'].forEach(field => {
+    if (suggestionState[field]) {
+      document.getElementById(`${field}-input`).value = suggestionState[field];
+      document.getElementById(`${field}-suggestions`).hidden = true;
+    }
+  });
+
   const fromVal = suggestionState.from || document.getElementById('from-input').value.trim();
   const toVal   = suggestionState.to   || document.getElementById('to-input').value.trim();
 
@@ -512,7 +560,7 @@ async function findRoute() {
     allShelters = fetchShelters(route.coords);
 
     // 4. Filter by proximity
-    const { nearby, far } = sheltersNearRoute(allShelters, route.coords, currentMode);
+    const { nearby } = sheltersNearRoute(allShelters, route.coords, currentMode);
 
     // 5. Render all shelters — nearby highlighted green, rest grey
     renderShelters(nearby);
@@ -529,7 +577,10 @@ async function findRoute() {
     document.getElementById('nearest-btn').hidden = false;
 
   } catch (e) {
-    setStatus('Error: ' + e.message, 'error');
+    const msg = e.message === 'Failed to fetch'
+      ? 'Network error — please check your connection and try again'
+      : e.message;
+    setStatus('Error: ' + msg, 'error');
     console.error(e);
   } finally {
     setFindBtn(false);
@@ -626,7 +677,7 @@ window.addEventListener('DOMContentLoaded', () => {
       try {
         const { house }   = parseAddressInput(val);
         const streetPart  = val.replace(/\s*\d+.*$/, '').trim();
-        const filterVal   = streetPart.replace(/[^\u05D0-\u05EA\s]/g, '').trim();
+        const filterVal   = streetPart.replace(/[^\u05D0-\u05EA\s]/g, '').replace(/תל\s*אביב/g, '').trim();
         if (filterVal.length < 1) { listEl.hidden = true; return; }
         const results = await fetchSuggestions(filterVal);
         const seen = new Set();
@@ -647,6 +698,14 @@ window.addEventListener('DOMContentLoaded', () => {
     inputEl.addEventListener('input', onInput);
     inputEl.addEventListener('blur', () => setTimeout(() => { listEl.hidden = true; }, 150));
     inputEl.addEventListener('focus', () => { if (inputEl.value.trim().length >= 2) onInput(); });
+    inputEl.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      if (!listEl.hidden && suggestionState[field]) {
+        inputEl.value = suggestionState[field];
+        listEl.hidden = true;
+      }
+      findRoute();
+    });
   });
 
   // Nearest shelter button
@@ -669,4 +728,5 @@ window.addEventListener('DOMContentLoaded', () => {
   const badge = document.getElementById('shelter-count');
   badge.textContent = `🛡️ ${getAllShelters().length} shelters in Tel Aviv`;
   badge.hidden = false;
+
 });
