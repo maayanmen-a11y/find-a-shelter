@@ -28,6 +28,13 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 }
 
+// Realistic time estimates: bike 12 km/h urban, car +30% for traffic, walk from OSRM
+function estimateTime(distance, duration, mode) {
+  if (mode === 'bicycle') return Math.ceil(distance / 200); // 12 km/h = 200 m/min
+  if (mode === 'car')     return Math.ceil(duration / 60 * 1.3); // OSRM + 30% for traffic
+  return Math.ceil(duration / 60); // walking: trust OSRM
+}
+
 async function fetchRetry(url, opts) {
   try {
     return await fetch(url, opts);
@@ -464,9 +471,9 @@ async function navigateToNearestShelter() {
       ]);
       currentRoute = carRoute.coords;
       const carKm   = (carRoute.distance / 1000).toFixed(2);
-      const carMins = Math.ceil(carRoute.duration / 60);
+      const carMins = estimateTime(carRoute.distance, carRoute.duration, 'car');
       const walkKm  = (footRoute.distance / 1000).toFixed(2);
-      const walkMins = Math.ceil(footRoute.duration / 60);
+      const walkMins = estimateTime(footRoute.distance, footRoute.duration, 'foot');
 
       renderRoute(carRoute.coords, carKm, carMins, '#3b82f6', '🚗');
       renderWalkRoute(footRoute.coords, walkKm, walkMins);
@@ -491,9 +498,7 @@ async function navigateToNearestShelter() {
       const route  = await getRoute(gps, dest, 'foot');
       currentRoute = route.coords;
       const distKm = (route.distance / 1000).toFixed(2);
-      const mins   = currentMode === 'bicycle'
-        ? Math.ceil(route.distance / 250)   // 15 km/h = 250 m/min
-        : Math.ceil(route.duration / 60);   // walking: use OSRM time
+      const mins   = estimateTime(route.distance, route.duration, currentMode);
       const modeIcon = currentMode === 'bicycle' ? '🚴' : '🚶';
 
       renderRoute(route.coords, distKm, mins, '#3b82f6', modeIcon);
@@ -552,7 +557,7 @@ async function findRoute() {
     const route  = await getRoute(from, to, currentMode);
     currentRoute = route.coords;
     const distKm  = (route.distance / 1000).toFixed(2);
-    const routeMins = Math.ceil(route.duration / 60);
+    const routeMins = estimateTime(route.distance, route.duration, currentMode);
     renderRoute(route.coords, distKm, routeMins);
     map.fitBounds(route.bounds, { padding: [60, 60] });
 
@@ -570,7 +575,7 @@ async function findRoute() {
     badge.hidden = false;
 
     const modeLabel = { foot: 'walking', bicycle: 'biking', car: 'driving' }[currentMode] || currentMode;
-    const mins      = Math.ceil(route.duration / 60);
+    const mins      = estimateTime(route.distance, route.duration, currentMode);
     setStatus(`Route: ${distKm} km · ~${mins} min ${modeLabel} · ${nearby.length} shelters nearby`, 'success');
 
     // Show emergency button
@@ -728,5 +733,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const badge = document.getElementById('shelter-count');
   badge.textContent = `🛡️ ${getAllShelters().length} shelters in Tel Aviv`;
   badge.hidden = false;
+
+  // Always show the nearest-shelter button — works from GPS even without a planned route
+  document.getElementById('nearest-btn').hidden = false;
 
 });
