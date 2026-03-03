@@ -10,6 +10,7 @@ const NOMINATIM       = 'https://nominatim.openstreetmap.org/search';
 const OSRM_ROUTE      = 'https://router.project-osrm.org/route/v1';
 const OSRM_FOOT_ROUTE = 'https://routing.openstreetmap.de/routed-foot/route/v1';
 const OSRM_TABLE      = 'https://router.project-osrm.org/table/v1';
+const OVERPASS        = 'https://overpass-api.de/api/interpreter';
 
 const THRESHOLD = { foot: 200, bicycle: 300, car: 400 }; // metres
 
@@ -19,6 +20,13 @@ let currentMode   = 'foot';
 let currentRoute  = null;   // GeoJSON coordinates array
 let allShelters   = [];     // cached shelter list
 let userCoords    = null;   // latest GPS fix {lat, lon}
+
+const suggestionState = { from: null, to: null }; // top canonical address per field
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
 
 // ── Init map ───────────────────────────────────────────────────────────────
 function initMap() {
@@ -55,14 +63,164 @@ function getGPS() {
   });
 }
 
+// ── Geocoding helpers ──────────────────────────────────────────────────────
+function parseAddressInput(address) {
+  const m = address.trim().match(/^(.*?)\s+(\d+)(?:\s|$)/);
+  return m ? { street: m[1].trim(), house: parseInt(m[2]) } : { street: address.trim(), house: null };
+}
+
+function cumulativeLengths(geom) {
+  const lens = [0];
+  for (let i = 1; i < geom.length; i++)
+    lens.push(lens[i-1] + haversine(geom[i-1].lat, geom[i-1].lon, geom[i].lat, geom[i].lon));
+  return lens;
+}
+
+function projectOnPolyline(lat, lon, geom, cumLens) {
+  const total = cumLens[cumLens.length - 1];
+  let best = Infinity, bestT = 0;
+  for (let i = 0; i < geom.length - 1; i++) {
+    const ax = geom[i].lon, ay = geom[i].lat, bx = geom[i+1].lon, by = geom[i+1].lat;
+    const dx = bx-ax, dy = by-ay, len2 = dx*dx + dy*dy;
+    const t = len2 ? Math.max(0, Math.min(1, ((lon-ax)*dx + (lat-ay)*dy) / len2)) : 0;
+    const d = (lon - ax - t*dx)**2 + (lat - ay - t*dy)**2;
+    if (d < best) { best = d; bestT = (cumLens[i] + t*(cumLens[i+1]-cumLens[i])) / total; }
+  }
+  return bestT;
+}
+
+function positionAtT(t, geom, cumLens) {
+  const target = t * cumLens[cumLens.length - 1];
+  for (let i = 0; i < geom.length - 1; i++) {
+    if (cumLens[i+1] >= target) {
+      const frac = (target - cumLens[i]) / (cumLens[i+1] - cumLens[i]);
+      return { lat: geom[i].lat + frac*(geom[i+1].lat - geom[i].lat),
+               lon: geom[i].lon + frac*(geom[i+1].lon - geom[i].lon) };
+    }
+  }
+  return { lat: geom[geom.length-1].lat, lon: geom[geom.length-1].lon };
+}
+
 // ── Geocoding ──────────────────────────────────────────────────────────────
 async function geocode(address) {
-  const url = `${NOMINATIM}?q=${encodeURIComponent(address)}&format=json&limit=1&countrycodes=il`;
+  const { street, house } = parseAddressInput(address);
+
+  if (house !== null) {
+    try {
+      // Step 1: Find the street as a WAY via Nominatim (no house number)
+      const streetUrl = `${NOMINATIM}?q=${encodeURIComponent(street + ' תל אביב')}&format=json&limit=5&countrycodes=il&namedetails=1`;
+      const streetRes = await fetch(streetUrl, { headers: { 'Accept-Language': 'he' } });
+      const streetData = await streetRes.json();
+      const wayResult  = streetData.find(r => r.osm_type === 'W' && r.class === 'highway');
+
+      if (wayResult) {
+        const osmName = wayResult.namedetails?.name || wayResult.display_name.split(',')[0].trim();
+
+        // Step 2: Overpass — all segments of that street + address nodes within 25 m
+        const query = `[out:json][timeout:15];
+area["name"="תל אביב-יפו"]["boundary"="administrative"]->.city;
+way["name"="${osmName}"]["highway"](area.city)->.ways;
+node(around.ways:25)["addr:housenumber"]->.addrnodes;
+(.ways;.addrnodes;);
+out geom;`;
+        const ovRes  = await fetch(OVERPASS, { method: 'POST', body: 'data=' + encodeURIComponent(query) });
+        const ovData = await ovRes.json();
+
+        const ways      = ovData.elements.filter(e => e.type === 'way' && e.geometry?.length);
+        const addrNodes = ovData.elements.filter(e => e.type === 'node' && e.tags?.['addr:housenumber']);
+
+        if (ways.length) {
+          const geom    = ways.flatMap(w => w.geometry);
+          const cumLens = cumulativeLengths(geom);
+
+          const calibPts = addrNodes
+            .map(n => ({ num: parseInt(n.tags['addr:housenumber']), t: projectOnPolyline(n.lat, n.lon, geom, cumLens) }))
+            .filter(c => !isNaN(c.num))
+            .sort((a, b) => a.num - b.num);
+
+          let t;
+          if (calibPts.length >= 2) {
+            const lo = [...calibPts].reverse().find(c => c.num <= house) || calibPts[0];
+            const hi = calibPts.find(c => c.num >= house) || calibPts[calibPts.length - 1];
+            t = lo.num === hi.num ? lo.t : lo.t + (house - lo.num) / (hi.num - lo.num) * (hi.t - lo.t);
+            t = Math.max(0, Math.min(1, t));
+          } else if (calibPts.length === 1) {
+            t = calibPts[0].t;
+          } else {
+            t = 0.5;
+          }
+          return positionAtT(t, geom, cumLens);
+        }
+      }
+    } catch (e) {
+      console.warn('Street-geometry geocoding failed, falling back to Nominatim:', e);
+    }
+  }
+
+  // Fallback: original Nominatim free-text query (always include city for accuracy)
+  const queryAddr = address.includes('תל אביב') ? address : address + ' תל אביב';
+  const url = `${NOMINATIM}?q=${encodeURIComponent(queryAddr)}&format=json&limit=1&countrycodes=il`;
   const res  = await fetch(url, { headers: { 'Accept-Language': 'en' } });
   if (!res.ok) throw new Error('Geocoding request failed');
   const data = await res.json();
   if (!data.length) throw new Error(`Address not found: "${address}"`);
   return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+}
+
+// ── Autocomplete ───────────────────────────────────────────────────────────
+let _streetList = null;
+function getStreetList() {
+  if (!_streetList) {
+    const names = new Set();
+    for (const s of getAllShelters()) {
+      if (s.address) names.add(s.address.replace(/\s+\d+\s*$/, '').trim());
+    }
+    _streetList = [...names].filter(Boolean);
+  }
+  return _streetList;
+}
+
+async function fetchSuggestions(query) {
+  return getStreetList()
+    .filter(name => name.includes(query))
+    .map(name => ({ properties: { name, osm_key: 'highway' } }));
+}
+
+function formatSuggestion(feature, overrideHouse = null) {
+  const p    = feature.properties;
+  const road = p.street || p.name;                                    // highway way → p.name; address node → p.street
+  const num  = overrideHouse !== null ? overrideHouse : p.housenumber;
+  if (road && num) return `${road} ${num}`;
+  if (road)        return road;
+  return '';
+}
+
+function showSuggestions(inputEl, listEl, field, results, house = null) {
+  listEl.innerHTML = '';
+  if (!results.length) {
+    const li = document.createElement('li');
+    li.className = 'suggestion-empty';
+    li.textContent = 'No matches';
+    listEl.appendChild(li);
+    suggestionState[field] = null;
+    listEl.hidden = false;
+    return;
+  }
+  results.forEach((r, i) => {
+    const label = formatSuggestion(r, house);
+    const li    = document.createElement('li');
+    li.textContent = label;
+    if (i === 0) li.classList.add('active');
+    li.addEventListener('mousedown', e => {
+      e.preventDefault(); // don't trigger blur
+      inputEl.value = label;
+      suggestionState[field] = label;
+      listEl.hidden = true;
+    });
+    listEl.appendChild(li);
+  });
+  suggestionState[field] = formatSuggestion(results[0], house);
+  listEl.hidden = false;
 }
 
 // ── Routing ────────────────────────────────────────────────────────────────
@@ -324,8 +482,8 @@ async function navigateToNearestShelter() {
 
 // ── Main "Find Route" flow ─────────────────────────────────────────────────
 async function findRoute() {
-  const fromVal = document.getElementById('from-input').value.trim();
-  const toVal   = document.getElementById('to-input').value.trim();
+  const fromVal = suggestionState.from || document.getElementById('from-input').value.trim();
+  const toVal   = suggestionState.to   || document.getElementById('to-input').value.trim();
 
   if (!fromVal) { setStatus('Please enter a start address', 'error'); return; }
   if (!toVal)   { setStatus('Please enter a destination',   'error'); return; }
@@ -338,6 +496,8 @@ async function findRoute() {
     // 1. Geocode
     setStatus('Geocoding addresses…');
     const [from, to] = await Promise.all([geocode(fromVal), geocode(toVal)]);
+    suggestionState.from = null;
+    suggestionState.to   = null;
 
     // 2. Route
     setStatus('Fetching route…');
@@ -425,12 +585,13 @@ window.addEventListener('DOMContentLoaded', () => {
       const gps = await getGPS();
       userCoords = gps;
       showGpsDot(gps.lat, gps.lon);
-      // Reverse geocode for a readable label
-      const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${gps.lat}&lon=${gps.lon}&format=json`);
+      // Reverse geocode for a readable label (Hebrew)
+      const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${gps.lat}&lon=${gps.lon}&format=json&accept-language=he`, { headers: { 'Accept-Language': 'he' } });
       const data = await res.json();
-      const label = data.display_name
-        ? data.display_name.split(',').slice(0, 2).join(', ')
-        : `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`;
+      const addr  = data.address;
+      const label = addr?.road
+        ? (addr.house_number ? `${addr.road} ${addr.house_number}` : addr.road)
+        : (data.display_name?.split(',').slice(0, 2).join(', ') || `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`);
       document.getElementById('from-input').value = label;
       map.setView([gps.lat, gps.lon], 15);
       setStatus('Location set ✓', 'success');
@@ -449,6 +610,43 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById(id).addEventListener('keydown', e => {
       if (e.key === 'Enter') findRoute();
     });
+  });
+
+  // Autocomplete suggestions
+  [
+    { inputId: 'from-input', listId: 'from-suggestions', field: 'from' },
+    { inputId: 'to-input',   listId: 'to-suggestions',   field: 'to'  },
+  ].forEach(({ inputId, listId, field }) => {
+    const inputEl = document.getElementById(inputId);
+    const listEl  = document.getElementById(listId);
+
+    const onInput = debounce(async () => {
+      const val = inputEl.value.trim();
+      if (val.length < 2) { listEl.hidden = true; suggestionState[field] = null; return; }
+      try {
+        const { house }   = parseAddressInput(val);
+        const streetPart  = val.replace(/\s*\d+.*$/, '').trim();
+        const filterVal   = streetPart.replace(/[^\u05D0-\u05EA\s]/g, '').trim();
+        if (filterVal.length < 1) { listEl.hidden = true; return; }
+        const results = await fetchSuggestions(filterVal);
+        const seen = new Set();
+        const filtered = results
+          .filter(r => {
+            const p = r.properties;
+            if (p.osm_key !== 'highway' && !p.street) return false; // streets + address nodes only
+            const label = formatSuggestion(r, house);
+            if (!label || seen.has(label)) return false;
+            seen.add(label);
+            return filterVal.length < 1 || label.includes(filterVal);
+          })
+          .slice(0, 3);
+        showSuggestions(inputEl, listEl, field, filtered, house);
+      } catch { listEl.hidden = true; }
+    }, 300);
+
+    inputEl.addEventListener('input', onInput);
+    inputEl.addEventListener('blur', () => setTimeout(() => { listEl.hidden = true; }, 150));
+    inputEl.addEventListener('focus', () => { if (inputEl.value.trim().length >= 2) onInput(); });
   });
 
   // Nearest shelter button
