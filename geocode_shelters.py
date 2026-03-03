@@ -33,7 +33,7 @@ for i, row in enumerate(rows):
     num, kind, street, house, entrance, area, notes = row
     if not street or not house:
         continue
-    address = f"{street} {house}, \u05ea\u05dc \u05d0\u05d1\u05d9\u05d1-\u05d9\u05e4\u05d5, Israel"
+    address = f"{street} {house} \u05ea\u05dc \u05d0\u05d1\u05d9\u05d1"
     try:
         lat, lon = geocode(address)
     except Exception as e:
