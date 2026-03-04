@@ -20,6 +20,10 @@ let currentMode   = 'foot';
 let currentRoute  = null;   // GeoJSON coordinates array
 let allShelters   = [];     // cached shelter list
 let userCoords    = null;   // latest GPS fix {lat, lon}
+let watchId        = null;   // watchPosition ID for live tracking
+let accuracyCircle = null;   // circle showing GPS accuracy radius
+let headingMode    = false;  // true = map rotates with phone compass
+let currentHeading = 0;      // latest compass reading in degrees
 
 const suggestionState = { from: null, to: null }; // top canonical address per field
 
@@ -58,14 +62,64 @@ function initMap() {
 }
 
 // ── GPS dot ────────────────────────────────────────────────────────────────
-function showGpsDot(lat, lon) {
-  const icon = L.divIcon({ className: '', html: '<div class="gps-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+function showGpsDot(lat, lon, accuracy) {
+  const html = '<div class="gps-dot-wrap"><div class="gps-cone"></div><div class="gps-dot"></div></div>';
+  const icon = L.divIcon({ className: '', html, iconSize: [32, 32], iconAnchor: [16, 16] });
   if (gpsDotMarker) {
     gpsDotMarker.setLatLng([lat, lon]);
   } else {
     gpsDotMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 }).addTo(map);
   }
+  if (accuracy) {
+    if (accuracyCircle) {
+      accuracyCircle.setLatLng([lat, lon]).setRadius(accuracy);
+    } else {
+      accuracyCircle = L.circle([lat, lon], {
+        radius: accuracy,
+        color: '#3b82f6',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.08,
+        weight: 1,
+        opacity: 0.3,
+      }).addTo(map);
+    }
+  }
 }
+
+function updateGpsDotHeading(heading) {
+  const el = gpsDotMarker?.getElement()?.querySelector('.gps-dot-wrap');
+  if (el) el.style.transform = `rotate(${heading}deg)`;
+}
+
+function startTracking() {
+  if (watchId != null || !navigator.geolocation) return;
+  watchId = navigator.geolocation.watchPosition(
+    pos => {
+      userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      showGpsDot(userCoords.lat, userCoords.lon, pos.coords.accuracy);
+      if (headingMode) map.panTo([userCoords.lat, userCoords.lon], { animate: true });
+    },
+    () => { /* silent failure */ },
+    { enableHighAccuracy: true, maximumAge: 2000 }
+  );
+}
+
+function getHeading(e) {
+  if (e.webkitCompassHeading != null) return e.webkitCompassHeading;       // iOS
+  if (e.absolute && e.alpha != null) return (360 - e.alpha) % 360;         // Android
+  return null;
+}
+
+function onOrientation(e) {
+  const h = getHeading(e);
+  if (h == null) return;
+  currentHeading = h;
+  updateGpsDotHeading(h);
+  if (headingMode) document.getElementById('map').style.transform = `rotate(${-h}deg)`;
+}
+
+window.addEventListener('deviceorientationabsolute', onOrientation, true);
+window.addEventListener('deviceorientation', e => { if (!e.absolute) onOrientation(e); }, true);
 
 // ── Geolocation helpers ────────────────────────────────────────────────────
 function getGPS() {
@@ -716,17 +770,26 @@ window.addEventListener('DOMContentLoaded', () => {
   // Nearest shelter button
   document.getElementById('nearest-btn').addEventListener('click', navigateToNearestShelter);
 
-  // Try to get GPS silently on load
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-      pos => {
-        userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-        showGpsDot(userCoords.lat, userCoords.lon);
-      },
-      () => {/* silent */},
-      { timeout: 5000 }
-    );
-  }
+  // Start continuous GPS tracking on load
+  startTracking();
+
+  // Compass toggle
+  document.getElementById('compass-btn').addEventListener('click', async () => {
+    if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
+      try {
+        const perm = await DeviceOrientationEvent.requestPermission();
+        if (perm !== 'granted') { setStatus('Compass permission denied', 'error'); return; }
+      } catch { return; }
+    }
+    headingMode = !headingMode;
+    document.getElementById('compass-btn').classList.toggle('active', headingMode);
+    if (!headingMode) {
+      document.getElementById('map').style.transform = '';
+    } else if (userCoords) {
+      map.panTo([userCoords.lat, userCoords.lon]);
+    }
+    setStatus(headingMode ? 'Heading-up mode on' : 'North-up mode', 'success');
+  });
 
   // Show all shelters immediately on load (grey — no route yet)
   renderShelters([]);
