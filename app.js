@@ -23,8 +23,9 @@ let allShelters   = [];     // cached shelter list
 let userCoords    = null;   // latest GPS fix {lat, lon}
 let watchId        = null;   // watchPosition ID for live tracking
 let accuracyCircle = null;   // circle showing GPS accuracy radius
-let headingMode    = false;  // true = map rotates with phone compass
-let currentHeading = 0;      // latest compass reading in degrees
+let headingMode     = false; // true = map rotates with phone compass
+let headingCentered = true;  // false = user panned away; GPS no longer auto-centers
+let currentHeading  = 0;     // latest compass reading in degrees
 let _dragAnchor    = null;   // {x,y} touch/mouse anchor for rotated pan
 let manualRotationAngle  = 0;     // degrees accumulated from two-finger rotation
 let _twoFingerStartAngle = null;  // angle between fingers when pinch started
@@ -130,7 +131,7 @@ function startTracking() {
     pos => {
       userCoords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
       showGpsDot(userCoords.lat, userCoords.lon, pos.coords.accuracy);
-      if (headingMode) map.panTo([userCoords.lat, userCoords.lon], { animate: true });
+      if (headingMode && headingCentered) map.panTo([userCoords.lat, userCoords.lon], { animate: true });
     },
     () => { /* silent failure */ },
     { enableHighAccuracy: true, maximumAge: 2000 }
@@ -200,6 +201,7 @@ function onRotatedDragStart(e) {
   if (e.touches && e.touches.length !== 1) return;
   const p = e.touches ? e.touches[0] : e;
   _dragAnchor = { x: p.clientX, y: p.clientY };
+  if (headingMode) headingCentered = false; // user is panning away from GPS dot
   e.preventDefault();
 }
 function onRotatedDragMove(e) {
@@ -982,17 +984,27 @@ window.addEventListener('DOMContentLoaded', () => {
         if (perm !== 'granted') { setStatus('Compass permission denied', 'error'); return; }
       } catch { return; }
     }
-    headingMode = !headingMode;
-    document.getElementById('compass-btn').classList.toggle('active', headingMode);
-    if (headingMode) {
-      // Entering heading-up: clear any manual rotation, follow phone compass
+    if (!headingMode) {
+      // Turn heading-up ON
+      headingMode = true;
+      headingCentered = true;
       manualRotationAngle = 0;
       if (userCoords) map.panTo([userCoords.lat, userCoords.lon]);
+      setStatus('Heading-up mode on', 'success');
+    } else if (!headingCentered) {
+      // Already heading-up but panned away: re-center, stay in heading-up
+      headingCentered = true;
+      if (userCoords) map.panTo([userCoords.lat, userCoords.lon]);
+      setStatus('Centered', 'success');
+    } else {
+      // Already heading-up and centered: turn OFF
+      headingMode = false;
+      setStatus('North-up mode', 'success');
     }
+    document.getElementById('compass-btn').classList.toggle('active', headingMode);
     applyMapRotation();
     updateGpsDotHeading(currentHeading);
     syncDragHandlers();
-    setStatus(headingMode ? 'Heading-up mode on' : 'North-up mode', 'success');
   });
 
   // Show all shelters immediately on load (grey — no route yet)
