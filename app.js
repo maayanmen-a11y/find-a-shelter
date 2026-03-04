@@ -31,9 +31,10 @@ let manualRotationAngle  = 0;     // degrees accumulated from two-finger rotatio
 let _twoFingerStartAngle = null;  // angle between fingers when pinch started
 let _twoFingerStartManual = 0;    // manualRotationAngle snapshot at pinch start
 let _customDragActive    = false; // whether custom 1-finger drag is currently attached
-let addShelterPinMode    = false; // true when user is dropping a pin for new shelter
-let addShelterMarker     = null;  // temporary pin marker
-let pendingShelterCoords = null;  // {lat, lon} from dropped pin
+let addShelterPinMode        = false; // true when user is dropping a pin for new shelter
+let addShelterMarker         = null;  // temporary pin marker
+let pendingShelterCoords     = null;  // {lat, lon} from dropped pin
+let _panelCollapsedByPinDrop = false; // whether we auto-collapsed the panel for pin-drop
 
 const suggestionState = { from: null, to: null }; // top canonical address per field
 
@@ -76,22 +77,10 @@ function initMap() {
   mc.addEventListener('touchmove',  onTwoFingerMove,  { passive: false });
   mc.addEventListener('touchend',   onTwoFingerEnd);
 
-  map.on('click', async e => {
+  // Leaflet click handles pin-drop when custom drag is NOT active (north-up, no rotation)
+  map.on('click', e => {
     if (!addShelterPinMode) return;
-    const { lat, lng: lon } = e.latlng;
-    pendingShelterCoords = { lat, lon };
-    if (addShelterMarker) map.removeLayer(addShelterMarker);
-    addShelterMarker = L.marker([lat, lon]).addTo(map);
-    addShelterPinMode = false;
-    map.getContainer().style.cursor = '';
-    openAddShelterModal();
-    try {
-      const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=he`);
-      const data = await res.json();
-      const a    = data.address;
-      const label = a?.road ? (a.house_number ? `${a.road} ${a.house_number}` : a.road) : '';
-      if (label) document.getElementById('add-shelter-address').value = label;
-    } catch {}
+    handlePinDrop(e.latlng.lat, e.latlng.lng);
   });
 }
 
@@ -157,7 +146,9 @@ window.addEventListener('deviceorientation', e => { if (!e.absolute) onOrientati
 
 function applyMapRotation() {
   const total = (headingMode ? -currentHeading : 0) + manualRotationAngle;
-  document.getElementById('map').style.transform = `rotate(${total}deg)`;
+  const mapEl = document.getElementById('map');
+  mapEl.style.transform = `rotate(${total}deg)`;
+  mapEl.style.setProperty('--counter-rot', `${-total}deg`);
 }
 
 function attachCustomDrag() {
@@ -197,10 +188,15 @@ function applyRotatedPan(dx, dy) {
   // Re-assert rotation in case Leaflet's layout work clobbered it
   if (headingMode || manualRotationAngle !== 0) applyMapRotation();
 }
+let _dragStartPoint = null; // screen coords where drag began, for tap detection
+
 function onRotatedDragStart(e) {
   if (e.touches && e.touches.length !== 1) return;
+  // Let taps on markers / popups pass through to Leaflet's own click handlers
+  if (e.target.closest('.leaflet-interactive, .leaflet-popup')) return;
   const p = e.touches ? e.touches[0] : e;
   _dragAnchor = { x: p.clientX, y: p.clientY };
+  _dragStartPoint = { x: p.clientX, y: p.clientY };
   if (headingMode) headingCentered = false; // user is panning away from GPS dot
   e.preventDefault();
 }
@@ -211,7 +207,32 @@ function onRotatedDragMove(e) {
   applyRotatedPan(p.clientX - _dragAnchor.x, p.clientY - _dragAnchor.y);
   _dragAnchor = { x: p.clientX, y: p.clientY };
 }
-function onRotatedDragEnd() { _dragAnchor = null; }
+function onRotatedDragEnd(e) {
+  if (_dragStartPoint) {
+    const end = e?.changedTouches?.[0] ?? e;
+    const dx = (end?.clientX ?? _dragStartPoint.x) - _dragStartPoint.x;
+    const dy = (end?.clientY ?? _dragStartPoint.y) - _dragStartPoint.y;
+    const isTap = Math.hypot(dx, dy) < 8;
+    // Pin-drop tap detection when custom drag intercepts the touch
+    if (addShelterPinMode && isTap) {
+      const sx = _dragStartPoint.x, sy = _dragStartPoint.y;
+      const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+      const total = (headingMode ? -currentHeading : 0) + manualRotationAngle;
+      const rad = -total * Math.PI / 180;
+      const rdx = (sx - cx) * Math.cos(rad) - (sy - cy) * Math.sin(rad);
+      const rdy = (sx - cx) * Math.sin(rad) + (sy - cy) * Math.cos(rad);
+      const mc = map.getContainer();
+      const latlng = map.containerPointToLatLng(
+        L.point(mc.offsetWidth / 2 + rdx, mc.offsetHeight / 2 + rdy)
+      );
+      handlePinDrop(latlng.lat, latlng.lng);
+    }
+    // Revert centered flag if it was just a tap, not a real pan
+    if (headingMode && isTap) headingCentered = true;
+  }
+  _dragAnchor = null;
+  _dragStartPoint = null;
+}
 
 // ── Two-finger rotation ─────────────────────────────────────────────────────
 function getTwoFingerAngle(touches) {
@@ -244,6 +265,46 @@ function onTwoFingerEnd(e) {
 }
 
 // ── Add shelter modal ──────────────────────────────────────────────────────
+function collapsePanelForPinDrop() {
+  const body = document.getElementById('panel-body');
+  const btn  = document.getElementById('panel-toggle');
+  if (!body.classList.contains('collapsed')) {
+    _panelCollapsedByPinDrop = true;
+    body.classList.add('collapsed');
+    body.style.maxHeight = '0';
+    btn.classList.add('collapsed');
+    btn.textContent = '▼';
+  }
+}
+function restorePanelAfterPinDrop() {
+  if (!_panelCollapsedByPinDrop) return;
+  _panelCollapsedByPinDrop = false;
+  const body = document.getElementById('panel-body');
+  const btn  = document.getElementById('panel-toggle');
+  body.classList.remove('collapsed');
+  body.style.maxHeight = body.scrollHeight + 'px';
+  btn.classList.remove('collapsed');
+  btn.textContent = '▲';
+}
+
+async function handlePinDrop(lat, lon) {
+  pendingShelterCoords = { lat, lon };
+  if (addShelterMarker) map.removeLayer(addShelterMarker);
+  addShelterMarker = L.marker([lat, lon]).addTo(map);
+  addShelterPinMode = false;
+  map.getContainer().style.cursor = '';
+  document.getElementById('pin-drop-banner').hidden = true;
+  restorePanelAfterPinDrop();
+  openAddShelterModal();
+  try {
+    const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=he`);
+    const data = await res.json();
+    const a    = data.address;
+    const label = a?.road ? (a.house_number ? `${a.road} ${a.house_number}` : a.road) : '';
+    if (label) document.getElementById('add-shelter-address').value = label;
+  } catch {}
+}
+
 function openAddShelterModal() {
   document.getElementById('add-shelter-overlay').hidden = false;
   document.getElementById('add-shelter-address').focus();
@@ -258,6 +319,8 @@ function cancelAddShelterPinMode() {
   if (addShelterMarker) { map.removeLayer(addShelterMarker); addShelterMarker = null; }
   pendingShelterCoords = null;
   map.getContainer().style.cursor = '';
+  document.getElementById('pin-drop-banner').hidden = true;
+  restorePanelAfterPinDrop();
 }
 async function submitShelter() {
   const address  = document.getElementById('add-shelter-address').value.trim();
@@ -639,7 +702,7 @@ function renderRoute(routeCoords, distKm, mins, color = '#3b82f6', labelIcon = '
   const latlngs = routeCoords.map(([lon, lat]) => [lat, lon]);
   routeLayer = L.polyline(latlngs, { color, weight: 5, opacity: 0.85 }).addTo(map);
   const label = [labelIcon, distKm ? `📏 ${distKm} km` : '', mins ? `~${mins} min` : ''].filter(Boolean).join(' · ');
-  if (label) routeLayer.bindTooltip(label, { permanent: true, direction: 'center', className: 'route-dist-label' });
+  if (label) routeLayer.bindTooltip(`<span class="lbl">${label}</span>`, { permanent: true, direction: 'center', className: 'route-dist-label' });
   return routeLayer;
 }
 
@@ -648,7 +711,7 @@ function renderWalkRoute(routeCoords, distKm, mins) {
   const latlngs = routeCoords.map(([lon, lat]) => [lat, lon]);
   walkRouteLayer = L.polyline(latlngs, { color: '#16a34a', weight: 5, opacity: 0.85 }).addTo(map);
   const label = `🚶 · 📏 ${distKm} km · ~${mins} min`;
-  walkRouteLayer.bindTooltip(label, { permanent: true, direction: 'center', className: 'route-dist-label' });
+  walkRouteLayer.bindTooltip(`<span class="lbl">${label}</span>`, { permanent: true, direction: 'center', className: 'route-dist-label' });
   return walkRouteLayer;
 }
 
@@ -968,6 +1031,8 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('add-shelter-overlay').hidden = true;
     addShelterPinMode = true;
     map.getContainer().style.cursor = 'crosshair';
+    document.getElementById('pin-drop-banner').hidden = false;
+    collapsePanelForPinDrop();
   });
 
   // Nearest shelter button

@@ -485,12 +485,54 @@ html, body {
 #nearest-btn:active { transform: scale(0.99); }
 #nearest-btn:disabled { background: #1e293b; border-color: #334155; color: #475569; cursor: not-allowed; }
 
+/* ─── Pin-drop instruction banner ─────────────────────────────── */
+#pin-drop-banner {
+  position: fixed;
+  top: 72px; /* sits just below the panel header */
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(96, 165, 250, 0.5);
+  color: #f1f5f9;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 10px 22px;
+  border-radius: 24px;
+  z-index: 900;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+#pin-drop-banner[hidden] { display: none; }
+
 /* ─── Leaflet popup customisation ─────────────────────────────── */
 .leaflet-popup-content-wrapper {
   background: #1e293b !important;
   color: #e2e8f0 !important;
   border-radius: 10px !important;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
+}
+/* Keep popup bubble upright when the map is CSS-rotated.
+   Targets the content-wrapper child (not .leaflet-popup itself) because
+   Leaflet sets inline transform on the parent, which would override CSS. */
+#map .leaflet-popup-content-wrapper {
+  transform: rotate(var(--counter-rot, 0deg));
+  transform-origin: 50% 100%; /* bottom-centre = where the tip meets the bubble */
+}
+/* Counter-rotate the inner label span (background included) — Leaflet owns the
+   outer tooltip's inline transform so we move all visuals to the child span. */
+.route-dist-label .lbl {
+  display: inline-block;
+  transform: rotate(var(--counter-rot, 0deg));
+  transform-origin: center center;
+  background: rgba(37, 99, 235, 0.9);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 3px 8px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+  white-space: nowrap;
 }
 .leaflet-popup-tip { background: #1e293b !important; }
 .leaflet-popup-content { font-size: 0.88rem; line-height: 1.5; }
@@ -499,16 +541,12 @@ html, body {
 .popup-dist { color: #60a5fa; font-size: 0.8rem; margin-top: 4px; }
 
 /* ─── Route distance label ────────────────────────────────────── */
+/* Outer tooltip element is a transparent shell — all visuals live in .lbl child */
 .route-dist-label {
-  background: rgba(37, 99, 235, 0.9) !important;
+  background: transparent !important;
   border: none !important;
-  border-radius: 6px !important;
-  color: #fff !important;
-  font-size: 0.82rem !important;
-  font-weight: 700 !important;
-  padding: 3px 8px !important;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.35) !important;
-  white-space: nowrap;
+  box-shadow: none !important;
+  padding: 0 !important;
 }
 .route-dist-label::before { display: none !important; }
 
