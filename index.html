@@ -13,6 +13,30 @@
 </head>
 <body>
 
+  <!-- Add Shelter overlay -->
+  <div id="add-shelter-overlay" hidden>
+    <div id="add-shelter-card">
+      <h2 id="add-shelter-title">➕ Add a New Shelter</h2>
+      <p id="add-shelter-desc">Know a shelter that's missing from the map? Submit it below.</p>
+      <div class="input-row">
+        <label for="add-shelter-address">Address</label>
+        <input id="add-shelter-address" type="text"
+               placeholder="e.g. שטרן 5, תל אביב" autocomplete="off" />
+      </div>
+      <button id="add-shelter-pin-btn">📍 Drop a pin on the map instead</button>
+      <div class="input-row">
+        <label for="add-shelter-notes">Notes (optional)</label>
+        <input id="add-shelter-notes" type="text"
+               placeholder="e.g. basement of building B" autocomplete="off" />
+      </div>
+      <div id="add-shelter-status"></div>
+      <div id="add-shelter-actions">
+        <button id="add-shelter-cancel">Cancel</button>
+        <button id="add-shelter-submit">Submit</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Disclaimer overlay -->
   <div id="disclaimer-overlay">
     <div id="disclaimer-card">
@@ -33,6 +57,12 @@
   <!-- Control Panel -->
   <div id="control-panel">
     <div id="panel-header">
+      <div id="menu-wrap">
+        <button id="menu-btn" title="Menu" aria-label="Open menu">☰</button>
+        <ul id="menu-dropdown" hidden>
+          <li id="menu-add-shelter">➕ Add a new shelter</li>
+        </ul>
+      </div>
       <span id="panel-title">🛡️ Tel Aviv Shelter Finder</span>
       <button id="compass-btn" title="Toggle heading-up mode" aria-label="Toggle compass">🧭</button>
       <button id="panel-toggle" aria-label="Toggle panel">▲</button>

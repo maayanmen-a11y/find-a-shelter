@@ -11,6 +11,7 @@ const OSRM_ROUTE      = 'https://router.project-osrm.org/route/v1';
 const OSRM_FOOT_ROUTE = 'https://routing.openstreetmap.de/routed-foot/route/v1';
 const OSRM_TABLE      = 'https://router.project-osrm.org/table/v1';
 const OVERPASS        = 'https://overpass-api.de/api/interpreter';
+const SHELTER_SUBMIT_URL = 'https://script.google.com/macros/s/AKfycbx6L-2m23SpbAMGdeccKZmAW9L_kSYhrhuOwaaXE82VvU2toJ0ARdhgVc0q6ehp8QIA/exec';
 
 const THRESHOLD = { foot: 200, bicycle: 300, car: 400 }; // metres
 
@@ -25,6 +26,13 @@ let accuracyCircle = null;   // circle showing GPS accuracy radius
 let headingMode    = false;  // true = map rotates with phone compass
 let currentHeading = 0;      // latest compass reading in degrees
 let _dragAnchor    = null;   // {x,y} touch/mouse anchor for rotated pan
+let manualRotationAngle  = 0;     // degrees accumulated from two-finger rotation
+let _twoFingerStartAngle = null;  // angle between fingers when pinch started
+let _twoFingerStartManual = 0;    // manualRotationAngle snapshot at pinch start
+let _customDragActive    = false; // whether custom 1-finger drag is currently attached
+let addShelterPinMode    = false; // true when user is dropping a pin for new shelter
+let addShelterMarker     = null;  // temporary pin marker
+let pendingShelterCoords = null;  // {lat, lon} from dropped pin
 
 const suggestionState = { from: null, to: null }; // top canonical address per field
 
@@ -60,6 +68,30 @@ function initMap() {
 
   shelterLayerGroup = L.layerGroup().addTo(map);
   destLayer         = L.layerGroup().addTo(map); // separate — never wipes shelters
+
+  // Always-on two-finger rotation handlers
+  const mc = map.getContainer();
+  mc.addEventListener('touchstart', onTwoFingerStart, { passive: true });
+  mc.addEventListener('touchmove',  onTwoFingerMove,  { passive: false });
+  mc.addEventListener('touchend',   onTwoFingerEnd);
+
+  map.on('click', async e => {
+    if (!addShelterPinMode) return;
+    const { lat, lng: lon } = e.latlng;
+    pendingShelterCoords = { lat, lon };
+    if (addShelterMarker) map.removeLayer(addShelterMarker);
+    addShelterMarker = L.marker([lat, lon]).addTo(map);
+    addShelterPinMode = false;
+    map.getContainer().style.cursor = '';
+    openAddShelterModal();
+    try {
+      const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=he`);
+      const data = await res.json();
+      const a    = data.address;
+      const label = a?.road ? (a.house_number ? `${a.road} ${a.house_number}` : a.road) : '';
+      if (label) document.getElementById('add-shelter-address').value = label;
+    } catch {}
+  });
 }
 
 // ── GPS dot ────────────────────────────────────────────────────────────────
@@ -116,17 +148,53 @@ function onOrientation(e) {
   if (h == null) return;
   currentHeading = h;
   updateGpsDotHeading(h);
-  if (headingMode) document.getElementById('map').style.transform = `rotate(${-h}deg)`;
+  if (headingMode) applyMapRotation();
 }
 
 window.addEventListener('deviceorientationabsolute', onOrientation, true);
 window.addEventListener('deviceorientation', e => { if (!e.absolute) onOrientation(e); }, true);
 
+function applyMapRotation() {
+  const total = (headingMode ? -currentHeading : 0) + manualRotationAngle;
+  document.getElementById('map').style.transform = `rotate(${total}deg)`;
+}
+
+function attachCustomDrag() {
+  if (_customDragActive) return;
+  _customDragActive = true;
+  map.dragging.disable();
+  const mc = map.getContainer();
+  mc.addEventListener('touchstart', onRotatedDragStart, { passive: false });
+  mc.addEventListener('touchmove',  onRotatedDragMove,  { passive: false });
+  mc.addEventListener('touchend',   onRotatedDragEnd);
+  mc.addEventListener('mousedown',  onRotatedDragStart);
+  mc.addEventListener('mousemove',  onRotatedDragMove);
+  mc.addEventListener('mouseup',    onRotatedDragEnd);
+}
+function detachCustomDrag() {
+  if (!_customDragActive) return;
+  _customDragActive = false;
+  map.dragging.enable();
+  const mc = map.getContainer();
+  mc.removeEventListener('touchstart', onRotatedDragStart);
+  mc.removeEventListener('touchmove',  onRotatedDragMove);
+  mc.removeEventListener('touchend',   onRotatedDragEnd);
+  mc.removeEventListener('mousedown',  onRotatedDragStart);
+  mc.removeEventListener('mousemove',  onRotatedDragMove);
+  mc.removeEventListener('mouseup',    onRotatedDragEnd);
+}
+function syncDragHandlers() {
+  if (headingMode || manualRotationAngle !== 0) attachCustomDrag();
+  else detachCustomDrag();
+}
+
 function applyRotatedPan(dx, dy) {
-  const h = currentHeading * Math.PI / 180;
+  const h = ((headingMode ? currentHeading : 0) - manualRotationAngle) * Math.PI / 180;
   const px = -dx * Math.cos(h) + dy * Math.sin(h);
   const py = -dx * Math.sin(h) - dy * Math.cos(h);
   map.panBy([px, py], { animate: false });
+  // Re-assert rotation in case Leaflet's layout work clobbered it
+  if (headingMode || manualRotationAngle !== 0) applyMapRotation();
 }
 function onRotatedDragStart(e) {
   if (e.touches && e.touches.length !== 1) return;
@@ -142,6 +210,89 @@ function onRotatedDragMove(e) {
   _dragAnchor = { x: p.clientX, y: p.clientY };
 }
 function onRotatedDragEnd() { _dragAnchor = null; }
+
+// ── Two-finger rotation ─────────────────────────────────────────────────────
+function getTwoFingerAngle(touches) {
+  const dx = touches[1].clientX - touches[0].clientX;
+  const dy = touches[1].clientY - touches[0].clientY;
+  return Math.atan2(dy, dx) * 180 / Math.PI;
+}
+function onTwoFingerStart(e) {
+  if (e.touches.length < 2) return;
+  _twoFingerStartAngle  = getTwoFingerAngle(e.touches);
+  _twoFingerStartManual = manualRotationAngle;
+}
+function onTwoFingerMove(e) {
+  if (e.touches.length < 2 || _twoFingerStartAngle === null) return;
+  e.preventDefault();
+  _dragAnchor = null; // cancel any in-progress 1-finger drag
+  if (headingMode) {
+    // Exiting heading-up: seed manual rotation from current map orientation
+    _twoFingerStartManual = -currentHeading + manualRotationAngle;
+    headingMode = false;
+    document.getElementById('compass-btn').classList.remove('active');
+  }
+  manualRotationAngle = _twoFingerStartManual + (getTwoFingerAngle(e.touches) - _twoFingerStartAngle);
+  applyMapRotation();
+  updateGpsDotHeading(currentHeading);
+  syncDragHandlers();
+}
+function onTwoFingerEnd(e) {
+  if (e.touches.length < 2) _twoFingerStartAngle = null;
+}
+
+// ── Add shelter modal ──────────────────────────────────────────────────────
+function openAddShelterModal() {
+  document.getElementById('add-shelter-overlay').hidden = false;
+  document.getElementById('add-shelter-address').focus();
+}
+function closeAddShelterModal() {
+  document.getElementById('add-shelter-overlay').hidden = true;
+  document.getElementById('add-shelter-status').textContent = '';
+  cancelAddShelterPinMode();
+}
+function cancelAddShelterPinMode() {
+  addShelterPinMode = false;
+  if (addShelterMarker) { map.removeLayer(addShelterMarker); addShelterMarker = null; }
+  pendingShelterCoords = null;
+  map.getContainer().style.cursor = '';
+}
+async function submitShelter() {
+  const address  = document.getElementById('add-shelter-address').value.trim();
+  const notes    = document.getElementById('add-shelter-notes').value.trim();
+  const statusEl = document.getElementById('add-shelter-status');
+  let lat, lon;
+  if (pendingShelterCoords) {
+    lat = pendingShelterCoords.lat;
+    lon = pendingShelterCoords.lon;
+  } else {
+    if (!address) { statusEl.textContent = 'Please enter an address or drop a pin.'; return; }
+    statusEl.textContent = 'Looking up address…';
+    try {
+      const coords = await geocode(address);
+      lat = coords.lat; lon = coords.lon;
+    } catch {
+      statusEl.textContent = 'Address not found. Try dropping a pin instead.';
+      return;
+    }
+  }
+  statusEl.textContent = 'Submitting…';
+  const payload = {
+    date: new Date().toISOString().slice(0, 10),
+    address: address || `${lat.toFixed(6)}, ${lon.toFixed(6)}`,
+    lat, lon, notes,
+  };
+  try {
+    await fetch(SHELTER_SUBMIT_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
+    statusEl.textContent = '✅ Thank you! Your submission has been received.';
+    document.getElementById('add-shelter-address').value = '';
+    document.getElementById('add-shelter-notes').value = '';
+    cancelAddShelterPinMode();
+    setTimeout(closeAddShelterModal, 2500);
+  } catch {
+    statusEl.textContent = '❌ Submission failed. Check your connection and try again.';
+  }
+}
 
 // ── Geolocation helpers ────────────────────────────────────────────────────
 function getGPS() {
@@ -794,6 +945,29 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('disclaimer-overlay').style.display = 'none';
   });
 
+  // Menu dropdown
+  document.getElementById('menu-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    const dd = document.getElementById('menu-dropdown');
+    dd.hidden = !dd.hidden;
+  });
+  document.getElementById('menu-add-shelter').addEventListener('click', () => {
+    document.getElementById('menu-dropdown').hidden = true;
+    openAddShelterModal();
+  });
+  document.addEventListener('click', () => {
+    document.getElementById('menu-dropdown').hidden = true;
+  });
+
+  // Add shelter modal
+  document.getElementById('add-shelter-cancel').addEventListener('click', closeAddShelterModal);
+  document.getElementById('add-shelter-submit').addEventListener('click', submitShelter);
+  document.getElementById('add-shelter-pin-btn').addEventListener('click', () => {
+    document.getElementById('add-shelter-overlay').hidden = true;
+    addShelterPinMode = true;
+    map.getContainer().style.cursor = 'crosshair';
+  });
+
   // Nearest shelter button
   document.getElementById('nearest-btn').addEventListener('click', navigateToNearestShelter);
 
@@ -810,26 +984,14 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     headingMode = !headingMode;
     document.getElementById('compass-btn').classList.toggle('active', headingMode);
-    const mc = map.getContainer();
-    if (!headingMode) {
-      document.getElementById('map').style.transform = '';
-      map.dragging.enable();
-      mc.removeEventListener('touchstart', onRotatedDragStart);
-      mc.removeEventListener('touchmove',  onRotatedDragMove);
-      mc.removeEventListener('touchend',   onRotatedDragEnd);
-      mc.removeEventListener('mousedown',  onRotatedDragStart);
-      mc.removeEventListener('mousemove',  onRotatedDragMove);
-      mc.removeEventListener('mouseup',    onRotatedDragEnd);
-    } else {
-      map.dragging.disable();
-      mc.addEventListener('touchstart', onRotatedDragStart, { passive: false });
-      mc.addEventListener('touchmove',  onRotatedDragMove,  { passive: false });
-      mc.addEventListener('touchend',   onRotatedDragEnd);
-      mc.addEventListener('mousedown',  onRotatedDragStart);
-      mc.addEventListener('mousemove',  onRotatedDragMove);
-      mc.addEventListener('mouseup',    onRotatedDragEnd);
+    if (headingMode) {
+      // Entering heading-up: clear any manual rotation, follow phone compass
+      manualRotationAngle = 0;
       if (userCoords) map.panTo([userCoords.lat, userCoords.lon]);
     }
+    applyMapRotation();
+    updateGpsDotHeading(currentHeading);
+    syncDragHandlers();
     setStatus(headingMode ? 'Heading-up mode on' : 'North-up mode', 'success');
   });
 
