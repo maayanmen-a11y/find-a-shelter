@@ -789,6 +789,11 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Disclaimer agree button
+  document.getElementById('disclaimer-agree-btn').addEventListener('click', () => {
+    document.getElementById('disclaimer-overlay').style.display = 'none';
+  });
+
   // Nearest shelter button
   document.getElementById('nearest-btn').addEventListener('click', navigateToNearestShelter);
 
