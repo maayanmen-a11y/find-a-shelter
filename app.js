@@ -24,6 +24,7 @@ let watchId        = null;   // watchPosition ID for live tracking
 let accuracyCircle = null;   // circle showing GPS accuracy radius
 let headingMode    = false;  // true = map rotates with phone compass
 let currentHeading = 0;      // latest compass reading in degrees
+let _dragAnchor    = null;   // {x,y} touch/mouse anchor for rotated pan
 
 const suggestionState = { from: null, to: null }; // top canonical address per field
 
@@ -120,6 +121,27 @@ function onOrientation(e) {
 
 window.addEventListener('deviceorientationabsolute', onOrientation, true);
 window.addEventListener('deviceorientation', e => { if (!e.absolute) onOrientation(e); }, true);
+
+function applyRotatedPan(dx, dy) {
+  const h = currentHeading * Math.PI / 180;
+  const px = -dx * Math.cos(h) + dy * Math.sin(h);
+  const py = -dx * Math.sin(h) - dy * Math.cos(h);
+  map.panBy([px, py], { animate: false });
+}
+function onRotatedDragStart(e) {
+  if (e.touches && e.touches.length !== 1) return;
+  const p = e.touches ? e.touches[0] : e;
+  _dragAnchor = { x: p.clientX, y: p.clientY };
+  e.preventDefault();
+}
+function onRotatedDragMove(e) {
+  if (!_dragAnchor) return;
+  if (e.touches && e.touches.length !== 1) { _dragAnchor = null; return; }
+  const p = e.touches ? e.touches[0] : e;
+  applyRotatedPan(p.clientX - _dragAnchor.x, p.clientY - _dragAnchor.y);
+  _dragAnchor = { x: p.clientX, y: p.clientY };
+}
+function onRotatedDragEnd() { _dragAnchor = null; }
 
 // ── Geolocation helpers ────────────────────────────────────────────────────
 function getGPS() {
@@ -783,10 +805,25 @@ window.addEventListener('DOMContentLoaded', () => {
     }
     headingMode = !headingMode;
     document.getElementById('compass-btn').classList.toggle('active', headingMode);
+    const mc = map.getContainer();
     if (!headingMode) {
       document.getElementById('map').style.transform = '';
-    } else if (userCoords) {
-      map.panTo([userCoords.lat, userCoords.lon]);
+      map.dragging.enable();
+      mc.removeEventListener('touchstart', onRotatedDragStart);
+      mc.removeEventListener('touchmove',  onRotatedDragMove);
+      mc.removeEventListener('touchend',   onRotatedDragEnd);
+      mc.removeEventListener('mousedown',  onRotatedDragStart);
+      mc.removeEventListener('mousemove',  onRotatedDragMove);
+      mc.removeEventListener('mouseup',    onRotatedDragEnd);
+    } else {
+      map.dragging.disable();
+      mc.addEventListener('touchstart', onRotatedDragStart, { passive: false });
+      mc.addEventListener('touchmove',  onRotatedDragMove,  { passive: false });
+      mc.addEventListener('touchend',   onRotatedDragEnd);
+      mc.addEventListener('mousedown',  onRotatedDragStart);
+      mc.addEventListener('mousemove',  onRotatedDragMove);
+      mc.addEventListener('mouseup',    onRotatedDragEnd);
+      if (userCoords) map.panTo([userCoords.lat, userCoords.lon]);
     }
     setStatus(headingMode ? 'Heading-up mode on' : 'North-up mode', 'success');
   });
