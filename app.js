@@ -76,22 +76,10 @@ function initMap() {
   mc.addEventListener('touchmove',  onTwoFingerMove,  { passive: false });
   mc.addEventListener('touchend',   onTwoFingerEnd);
 
-  map.on('click', async e => {
+  // Leaflet click handles pin-drop when custom drag is NOT active (north-up, no rotation)
+  map.on('click', e => {
     if (!addShelterPinMode) return;
-    const { lat, lng: lon } = e.latlng;
-    pendingShelterCoords = { lat, lon };
-    if (addShelterMarker) map.removeLayer(addShelterMarker);
-    addShelterMarker = L.marker([lat, lon]).addTo(map);
-    addShelterPinMode = false;
-    map.getContainer().style.cursor = '';
-    openAddShelterModal();
-    try {
-      const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=he`);
-      const data = await res.json();
-      const a    = data.address;
-      const label = a?.road ? (a.house_number ? `${a.road} ${a.house_number}` : a.road) : '';
-      if (label) document.getElementById('add-shelter-address').value = label;
-    } catch {}
+    handlePinDrop(e.latlng.lat, e.latlng.lng);
   });
 }
 
@@ -197,10 +185,13 @@ function applyRotatedPan(dx, dy) {
   // Re-assert rotation in case Leaflet's layout work clobbered it
   if (headingMode || manualRotationAngle !== 0) applyMapRotation();
 }
+let _dragStartPoint = null; // screen coords where drag began, for tap detection
+
 function onRotatedDragStart(e) {
   if (e.touches && e.touches.length !== 1) return;
   const p = e.touches ? e.touches[0] : e;
   _dragAnchor = { x: p.clientX, y: p.clientY };
+  _dragStartPoint = { x: p.clientX, y: p.clientY };
   if (headingMode) headingCentered = false; // user is panning away from GPS dot
   e.preventDefault();
 }
@@ -211,7 +202,37 @@ function onRotatedDragMove(e) {
   applyRotatedPan(p.clientX - _dragAnchor.x, p.clientY - _dragAnchor.y);
   _dragAnchor = { x: p.clientX, y: p.clientY };
 }
-function onRotatedDragEnd() { _dragAnchor = null; }
+function onRotatedDragEnd(e) {
+  // Detect tap (finger barely moved) while in pin-drop mode
+  if (addShelterPinMode && _dragStartPoint) {
+    const end = e?.changedTouches?.[0] ?? e;
+    const dx = (end?.clientX ?? _dragStartPoint.x) - _dragStartPoint.x;
+    const dy = (end?.clientY ?? _dragStartPoint.y) - _dragStartPoint.y;
+    if (Math.hypot(dx, dy) < 8) {
+      // Convert screen point through inverse CSS rotation to Leaflet container coords
+      const sx = _dragStartPoint.x, sy = _dragStartPoint.y;
+      const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+      const total = (headingMode ? -currentHeading : 0) + manualRotationAngle;
+      const rad = -total * Math.PI / 180;
+      const rdx = (sx - cx) * Math.cos(rad) - (sy - cy) * Math.sin(rad);
+      const rdy = (sx - cx) * Math.sin(rad) + (sy - cy) * Math.cos(rad);
+      const mc = map.getContainer();
+      const containerX = mc.offsetWidth  / 2 + rdx;
+      const containerY = mc.offsetHeight / 2 + rdy;
+      const latlng = map.containerPointToLatLng(L.point(containerX, containerY));
+      handlePinDrop(latlng.lat, latlng.lng);
+    }
+  }
+  if (headingMode && _dragStartPoint) {
+    // If it was actually a tap (not a pan), revert the centered flag
+    const end = e?.changedTouches?.[0] ?? e;
+    const dx = (end?.clientX ?? _dragStartPoint.x) - _dragStartPoint.x;
+    const dy = (end?.clientY ?? _dragStartPoint.y) - _dragStartPoint.y;
+    if (Math.hypot(dx, dy) < 8) headingCentered = true;
+  }
+  _dragAnchor = null;
+  _dragStartPoint = null;
+}
 
 // ── Two-finger rotation ─────────────────────────────────────────────────────
 function getTwoFingerAngle(touches) {
@@ -244,6 +265,22 @@ function onTwoFingerEnd(e) {
 }
 
 // ── Add shelter modal ──────────────────────────────────────────────────────
+async function handlePinDrop(lat, lon) {
+  pendingShelterCoords = { lat, lon };
+  if (addShelterMarker) map.removeLayer(addShelterMarker);
+  addShelterMarker = L.marker([lat, lon]).addTo(map);
+  addShelterPinMode = false;
+  map.getContainer().style.cursor = '';
+  openAddShelterModal();
+  try {
+    const res  = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=he`);
+    const data = await res.json();
+    const a    = data.address;
+    const label = a?.road ? (a.house_number ? `${a.road} ${a.house_number}` : a.road) : '';
+    if (label) document.getElementById('add-shelter-address').value = label;
+  } catch {}
+}
+
 function openAddShelterModal() {
   document.getElementById('add-shelter-overlay').hidden = false;
   document.getElementById('add-shelter-address').focus();
