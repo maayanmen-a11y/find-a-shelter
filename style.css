@@ -539,6 +539,20 @@ html, body {
 .popup-name { font-weight: 700; margin-bottom: 4px; color: #4ade80; }
 .popup-address { color: #94a3b8; }
 .popup-dist { color: #60a5fa; font-size: 0.8rem; margin-top: 4px; }
+.popup-delete-btn {
+  display: block;
+  margin-top: 10px;
+  width: 100%;
+  background: #dc2626;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.popup-delete-btn:hover { background: #b91c1c; }
 
 /* ─── Route distance label ────────────────────────────────────── */
 /* Outer tooltip element is a transparent shell — all visuals live in .lbl child */

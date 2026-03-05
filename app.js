@@ -12,6 +12,7 @@ const OSRM_FOOT_ROUTE = 'https://routing.openstreetmap.de/routed-foot/route/v1';
 const OSRM_TABLE      = 'https://router.project-osrm.org/table/v1';
 const OVERPASS        = 'https://overpass-api.de/api/interpreter';
 const SHELTER_SUBMIT_URL = 'https://script.google.com/macros/s/AKfycbx6L-2m23SpbAMGdeccKZmAW9L_kSYhrhuOwaaXE82VvU2toJ0ARdhgVc0q6ehp8QIA/exec';
+const OWNER_PIN          = '090286'; // set the same PIN in the Apps Script
 
 const THRESHOLD = { foot: 200, bicycle: 300, car: 400 }; // metres
 
@@ -35,6 +36,8 @@ let addShelterPinMode        = false; // true when user is dropping a pin for ne
 let addShelterMarker         = null;  // temporary pin marker
 let pendingShelterCoords     = null;  // {lat, lon} from dropped pin
 let _panelCollapsedByPinDrop = false; // whether we auto-collapsed the panel for pin-drop
+let userShelters  = [];    // user-submitted shelters loaded from Google Sheets
+let adminMode     = false; // true when owner has authenticated
 
 const suggestionState = { from: null, to: null }; // top canonical address per field
 
@@ -82,6 +85,9 @@ function initMap() {
     if (!addShelterPinMode) return;
     handlePinDrop(e.latlng.lat, e.latlng.lng);
   });
+
+  // Load user-submitted shelters from Google Sheets and render them
+  loadUserShelters();
 }
 
 // ── GPS dot ────────────────────────────────────────────────────────────────
@@ -349,6 +355,9 @@ async function submitShelter() {
   };
   try {
     await fetch(SHELTER_SUBMIT_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
+    // Optimistically add to map right away (negative rowIndex = local-only entry)
+    userShelters.push({ rowIndex: -Date.now(), ...payload });
+    renderShelters([]);
     statusEl.textContent = '✅ Thank you! Your submission has been received.';
     document.getElementById('add-shelter-address').value = '';
     document.getElementById('add-shelter-notes').value = '';
@@ -668,11 +677,14 @@ function makeIcon(color) {
   });
 }
 
-const greenIcon = makeIcon('#16a34a');
-const greyIcon  = makeIcon('#64748b');
-const redIcon   = makeIcon('#dc2626');
+const greenIcon  = makeIcon('#16a34a');
+const greyIcon   = makeIcon('#64748b');
+const redIcon    = makeIcon('#dc2626');
+const orangeIcon = makeIcon('#f97316'); // user-submitted shelters
 
-// Always draws ALL 351 shelters. Nearby ones (green) are highlighted; rest stay grey.
+// Always draws ALL shelters (built-in + user-submitted).
+// Nearby built-in ones (green) are highlighted; rest stay grey.
+// User-submitted shelters are always orange.
 function renderShelters(nearbyShelters) {
   shelterLayerGroup.clearLayers();
 
@@ -694,7 +706,50 @@ function renderShelters(nearbyShelters) {
     );
     shelterLayerGroup.addLayer(marker);
   }
+
+  // User-submitted shelters (orange; delete button visible in admin mode)
+  for (const s of userShelters) {
+    const marker = L.marker([s.lat, s.lon], { icon: orangeIcon, opacity: 0.9 });
+    const deleteBtn = adminMode
+      ? `<button class="popup-delete-btn" onclick="window.deleteUserShelter(${s.rowIndex})">🗑️ Delete this shelter</button>`
+      : '';
+    marker.bindPopup(
+      `<div class="popup-name">📍 ${s.address}</div>` +
+      (s.notes ? `<div class="popup-address">${s.notes}</div>` : '') +
+      `<div class="popup-address" style="font-size:0.75rem;opacity:0.6">Submitted ${s.date}</div>` +
+      deleteBtn
+    );
+    shelterLayerGroup.addLayer(marker);
+  }
 }
+
+async function loadUserShelters() {
+  try {
+    const res  = await fetch(SHELTER_SUBMIT_URL + '?action=list', { redirect: 'follow' });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch {
+      console.error('loadUserShelters: response is not JSON. First 300 chars:', text.slice(0, 300));
+      return;
+    }
+    userShelters = Array.isArray(data) ? data : [];
+    console.log('loadUserShelters: loaded', userShelters.length, 'shelter(s):', userShelters);
+    renderShelters([]);
+  } catch(err) { console.error('loadUserShelters fetch failed:', err.message); }
+}
+
+window.deleteUserShelter = function(rowIndex) {
+  if (!adminMode) return;
+  userShelters = userShelters.filter(s => s.rowIndex !== rowIndex);
+  renderShelters([]);
+  map.closePopup();
+  fetch(SHELTER_SUBMIT_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    body: JSON.stringify({ action: 'delete', rowIndex, pin: OWNER_PIN }),
+  }).catch(() => {});
+};
 
 function renderRoute(routeCoords, distKm, mins, color = '#3b82f6', labelIcon = '') {
   if (routeLayer) map.removeLayer(routeLayer);
@@ -1010,9 +1065,27 @@ window.addEventListener('DOMContentLoaded', () => {
     document.getElementById('disclaimer-overlay').style.display = 'none';
   });
 
-  // Menu dropdown
+  // Menu button: toggles dropdown; 5 clicks within 10 s → owner PIN prompt
+  let _menuClickCount = 0;
+  let _menuClickTimer = null;
   document.getElementById('menu-btn').addEventListener('click', e => {
     e.stopPropagation();
+    _menuClickCount++;
+    clearTimeout(_menuClickTimer);
+    if (_menuClickCount >= 5) {
+      _menuClickCount = 0;
+      document.getElementById('menu-dropdown').hidden = true;
+      const entered = prompt('Enter owner PIN:');
+      if (entered === OWNER_PIN) {
+        adminMode = true;
+        renderShelters([]);
+        setStatus('Owner mode enabled', 'success');
+      } else if (entered !== null) {
+        setStatus('Incorrect PIN', 'error');
+      }
+      return;
+    }
+    _menuClickTimer = setTimeout(() => { _menuClickCount = 0; }, 10000);
     const dd = document.getElementById('menu-dropdown');
     dd.hidden = !dd.hidden;
   });
