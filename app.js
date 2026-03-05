@@ -593,7 +593,8 @@ async function getRoute(from, to, profile) {
 
 // ── Shelter data — loaded from shelters-data.js (embedded at build time) ──
 function getAllShelters() {
-  return typeof SHELTERS_DATA !== 'undefined' ? SHELTERS_DATA : [];
+  const builtin = typeof SHELTERS_DATA !== 'undefined' ? SHELTERS_DATA : [];
+  return userShelters.length ? [...builtin, ...userShelters] : builtin;
 }
 
 function bboxFromRoute(routeCoords, bufferDeg = 0.02) {
