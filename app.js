@@ -705,6 +705,7 @@ function renderShelters(nearbyShelters) {
       `<div class="popup-address">${s.address || ''}</div>` +
       (nearbyInfo ? `<div class="popup-dist">✅ ${nearbyInfo.distToRoute} m from route</div>` : '')
     );
+    marker.off('click').on('click', function() { this.togglePopup(); });
     shelterLayerGroup.addLayer(marker);
   }
 
@@ -720,6 +721,7 @@ function renderShelters(nearbyShelters) {
       `<div class="popup-address" style="font-size:0.75rem;opacity:0.6">Submitted ${s.date}</div>` +
       deleteBtn
     );
+    marker.off('click').on('click', function() { this.togglePopup(); });
     shelterLayerGroup.addLayer(marker);
   }
 }
