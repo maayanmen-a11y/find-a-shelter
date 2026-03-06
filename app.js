@@ -522,13 +522,17 @@ function getStreetList() {
   return _streetList;
 }
 
+function normalizeHebrew(s) {
+  return s.replace(/[^\u05D0-\u05EA\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
 async function fetchSuggestions(query) {
   const source = (typeof STREETS_DATA !== 'undefined' ? STREETS_DATA : []).concat(getStreetList());
   const seen = new Set();
   return source
-    .filter(name => name.includes(query) && !seen.has(name) && seen.add(name))
+    .filter(name => normalizeHebrew(name).includes(query) && !seen.has(name) && seen.add(name))
     .sort((a, b) => {
-      const ai = a.indexOf(query), bi = b.indexOf(query);
+      const ai = normalizeHebrew(a).indexOf(query), bi = normalizeHebrew(b).indexOf(query);
       return ai !== bi ? ai - bi : a.length - b.length;
     })
     .map(name => ({ properties: { name, osm_key: 'highway' } }));
@@ -1043,7 +1047,7 @@ window.addEventListener('DOMContentLoaded', () => {
             const label = formatSuggestion(r, house);
             if (!label || seen.has(label)) return false;
             seen.add(label);
-            return filterVal.length < 1 || label.includes(filterVal);
+            return filterVal.length < 1 || normalizeHebrew(label).includes(filterVal);
           })
           .slice(0, 3);
         showSuggestions(inputEl, listEl, field, filtered, house);
